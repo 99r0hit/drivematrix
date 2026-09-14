@@ -1,0 +1,22 @@
+{
+  "1": {
+    "session_duration_minutes": 10,
+    "steering_sensitivity": 100,
+    "throttle_sensitivity": 100
+  },
+  "2": {
+    "session_duration_minutes": 10,
+    "steering_sensitivity": 130,
+    "throttle_sensitivity": 100
+  },
+  "3": {
+    "session_duration_minutes": 10,
+    "steering_sensitivity": 100,
+    "throttle_sensitivity": 100
+  },
+  "4": {
+    "session_duration_minutes": 10,
+    "steering_sensitivity": 100,
+    "throttle_sensitivity": 100
+  }
+}

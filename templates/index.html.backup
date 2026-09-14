@@ -1,0 +1,681 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DriveMatrix</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .metallic-finish { background: linear-gradient(135deg, #18181b 0%, #09090b 100%); }
+    </style>
+</head>
+
+<body class="bg-black text-white min-h-screen px-4 py-8">
+
+<nav class="border-b border-white/10 bg-black/90 px-4 py-4 mb-6">
+    <div class="max-w-5xl mx-auto flex items-center justify-between">
+        <div class="text-2xl font-black uppercase italic tracking-tighter">
+            Drive<span class="text-red-600">Matrix</span>
+        </div>
+        <a href="/wifi"
+           class="text-xs font-bold uppercase tracking-widest text-zinc-400 hover:text-white">
+            WiFi
+        </a>
+    </div>
+</nav>
+
+<main class="w-full max-w-5xl mx-auto space-y-5">
+
+    <section>
+        <div class="flex items-center justify-between mb-3">
+            <div>
+                <div class="text-xs font-black uppercase tracking-widest text-red-500">
+                    Cockpits
+                </div>
+                <div class="text-xs text-zinc-500 mt-1">
+                    Vehicle, session and steering settings
+                </div>
+            </div>
+            <button onclick="refreshCockpits()"
+                    class="border border-white/15 px-3 py-2 text-[11px] font-bold uppercase tracking-wider hover:bg-white/10">
+                Refresh
+            </button>
+        </div>
+
+        <div id="cockpitGrid" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="text-xs text-zinc-500 uppercase">Discovering...</div>
+        </div>
+
+        <div id="radioPool" class="mt-3"></div>
+
+        <div id="cockpitMessage" class="hidden text-xs font-bold mt-3"></div>
+    </section>
+
+    <section class="border-t border-white/10 pt-4 flex items-center justify-between">
+        <div>
+            <div class="text-sm font-bold uppercase tracking-wider">Auto Center</div>
+            <div class="text-xs text-zinc-500">Return spring force</div>
+        </div>
+
+        <label class="relative inline-flex items-center cursor-pointer">
+            <input type="checkbox" id="autocenterToggle"
+                   onchange="toggleAutocenter()" class="sr-only peer">
+            <div class="w-11 h-6 bg-zinc-800 rounded-full
+                        peer-checked:bg-red-600
+                        after:content-[''] after:absolute after:top-[2px] after:left-[2px]
+                        after:bg-white after:h-5 after:w-5 after:rounded-full
+                        after:transition-all peer-checked:after:translate-x-full">
+            </div>
+        </label>
+    </section>
+
+    <section class="border-t border-white/10 pt-4">
+        <div class="text-xs font-black uppercase tracking-widest text-red-500 mb-3">
+            Haptic Engine
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+
+            <label class="block">
+                <div class="flex justify-between text-xs mb-1">
+                    <span class="text-zinc-400">Grip Slip Limit</span>
+                    <span id="gripVal" class="text-red-500">0.65G</span>
+                </div>
+                <input type="range" id="gripThresh" min="0.20" max="1.50"
+                       step="0.05" value="0.65" oninput="updateHapticSettings()"
+                       class="w-full accent-red-600">
+            </label>
+
+            <label class="block">
+                <div class="flex justify-between text-xs mb-1">
+                    <span class="text-zinc-400">Bump Sensitivity</span>
+                    <span id="bumpVal" class="text-red-500">2.0x</span>
+                </div>
+                <input type="range" id="bumpSens" min="0.5" max="5.0"
+                       step="0.1" value="2.0" oninput="updateHapticSettings()"
+                       class="w-full accent-red-600">
+            </label>
+
+            <label class="block">
+                <div class="flex justify-between text-xs mb-1">
+                    <span class="text-zinc-400">Corner Resistance</span>
+                    <span id="centeringVal" class="text-red-500">25%</span>
+                </div>
+                <input type="range" id="centeringGain" min="0" max="50"
+                       step="1" value="25" oninput="updateHapticSettings()"
+                       class="w-full accent-red-600">
+            </label>
+
+            <label class="block">
+                <div class="flex justify-between text-xs mb-1">
+                    <span class="text-zinc-400">Filter Smoothing</span>
+                    <span id="alphaVal" class="text-red-500">0.20</span>
+                </div>
+                <input type="range" id="alphaFilter" min="0.05" max="0.50"
+                       step="0.05" value="0.20" oninput="updateHapticSettings()"
+                       class="w-full accent-red-600">
+            </label>
+
+        </div>
+    </section>
+
+</main>
+
+<script>
+let cockpitCache = {};
+let radioCache = [];
+
+function escapeHtml(value) {
+    return String(value ?? "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+}
+
+function showCockpitMessage(message, success) {
+    const el = document.getElementById("cockpitMessage");
+    el.innerText = message;
+    el.className = success
+        ? "text-xs font-bold text-green-500 mt-3"
+        : "text-xs font-bold text-red-500 mt-3";
+
+    clearTimeout(window.cockpitMessageTimer);
+    window.cockpitMessageTimer = setTimeout(() => {
+        el.className = "hidden text-xs font-bold mt-3";
+    }, 3500);
+}
+
+function renderCockpits(data) {
+    const grid = document.getElementById("cockpitGrid");
+    const vehicles = data.vehicles || [];
+
+    if (!data.cockpits || data.cockpits.length === 0) {
+        grid.innerHTML = '<div class="text-xs text-red-500">No cockpits found.</div>';
+        return;
+    }
+
+    cockpitCache = {};
+    data.cockpits.forEach(c => cockpitCache[c.cockpit_id] = c);
+    radioCache = data.radios || [];
+
+    grid.innerHTML = data.cockpits.map(cockpit => {
+        const wheel = cockpit.wheel;
+        const radio = cockpit.radio;
+        const settings = cockpit.settings || {};
+
+        const wheelText = wheel
+            ? escapeHtml(wheel.name)
+            : "Not connected";
+
+        const radioText = radio
+            ? escapeHtml(radio.radio_id)
+            : "Not connected";
+
+        const connectionText = radio
+            ? (radio.connected ? "CONNECTED" : "DISCONNECTED")
+            : "OFFLINE";
+
+        const statusClass = radio && radio.connected
+            ? "text-green-500"
+            : "text-zinc-600";
+
+        const assignedElsewhere = new Set(
+            data.cockpits
+                .filter(other => other.cockpit_id !== cockpit.cockpit_id)
+                .map(other => other.vehicle)
+                .filter(Boolean)
+        );
+
+        const options = [
+            `<option value="UNASSIGNED"${!cockpit.vehicle ? " selected" : ""}>Unassigned</option>`,
+            ...vehicles.map(vehicle => {
+                const inUse = assignedElsewhere.has(vehicle.name);
+                const selected = cockpit.vehicle === vehicle.name;
+                const disabledOption = inUse && !selected ? " disabled" : "";
+                const label = inUse && !selected
+                    ? `${escapeHtml(vehicle.name)} (IN USE)`
+                    : escapeHtml(vehicle.name);
+
+                return `
+                    <option value="${escapeHtml(vehicle.name)}"
+                        ${selected ? "selected" : ""}${disabledOption}>
+                        ${label}
+                    </option>
+                `;
+            })
+        ].join("");
+
+        const controlReady = !!(wheel && radio && radio.connected);
+        const disabled = !controlReady ? "disabled" : "";
+        const availabilityText = !wheel
+            ? "WAITING FOR WHEEL"
+            : !radio
+                ? "WAITING FOR NANO"
+                : !radio.connected
+                    ? "NANO DISCONNECTED"
+                    : "CONTROL READY";
+        const availabilityClass = controlReady ? "text-green-500" : "text-zinc-600";
+
+        return `
+            <div class="metallic-finish border border-white/10 rounded-lg p-4 space-y-4">
+
+                <div class="flex items-center justify-between">
+                    <div class="font-black uppercase tracking-wider">
+                        Cockpit ${cockpit.cockpit_id}
+                    </div>
+                    <div class="text-[10px] font-bold uppercase ${availabilityClass}">
+                        ${availabilityText}
+                    </div>
+                </div>
+
+                <div class="text-xs space-y-1.5">
+                    <div class="flex justify-between gap-3">
+                        <span class="text-zinc-500 uppercase">Wheel</span>
+                        <span class="text-right">${wheelText}</span>
+                    </div>
+                    <div class="flex justify-between gap-3">
+                        <span class="text-zinc-500 uppercase">Radio</span>
+                        <span class="text-right">${radioText}</span>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-[11px] text-zinc-500 uppercase tracking-wider mb-1">
+                        Vehicle
+                    </label>
+                    <select id="vehicle-${cockpit.cockpit_id}"
+                            ${disabled}
+                            onchange="selectCockpitVehicle(${cockpit.cockpit_id}, this.value)"
+                            class="w-full bg-zinc-950 border border-white/15 rounded px-3 py-2.5 text-sm font-bold
+                                   focus:outline-none focus:border-red-600 disabled:opacity-40">
+                        ${options}
+                    </select>
+                </div>
+
+                <div class="border-t border-white/10 pt-3 space-y-3">
+                    <div class="text-[11px] text-zinc-500 uppercase tracking-wider">
+                        Session
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <label class="flex-1">
+                            <span class="block text-[11px] text-zinc-500 uppercase mb-1">
+                                Duration (min)
+                            </span>
+                            <input type="number"
+                                   id="duration-${cockpit.cockpit_id}"
+                                   min="1"
+                                   max="120"
+                                   step="1"
+                                   value="${escapeHtml(settings.session_duration_minutes ?? 10)}"
+                                   class="w-full bg-zinc-950 border border-white/15 rounded px-2 py-2 text-sm
+                                          disabled:opacity-40"
+                                   ${cockpit.session?.active ? "disabled" : ""}>
+                        </label>
+
+                        <div class="flex-1">
+                            <span class="block text-[11px] text-zinc-500 uppercase mb-1">
+                                Remaining
+                            </span>
+                            <div id="remaining-${cockpit.cockpit_id}"
+                                 class="w-full bg-zinc-950 border border-white/15 rounded px-2 py-2 text-sm font-black">
+                                ${formatRemaining(cockpit.session?.remaining_seconds || 0)}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex gap-2">
+                        <button id="session-start-${cockpit.cockpit_id}"
+                                onclick="startCockpitSession(${cockpit.cockpit_id})"
+                                ${cockpit.session?.active || disabled ? "disabled" : ""}
+                                class="flex-1 border border-green-600/60 bg-green-600/10 text-green-500
+                                       py-2 text-xs font-black uppercase tracking-widest
+                                       hover:bg-green-600 hover:text-white transition disabled:opacity-30">
+                            Start
+                        </button>
+
+                        <button id="session-stop-${cockpit.cockpit_id}"
+                                onclick="stopCockpitSession(${cockpit.cockpit_id})"
+                                ${cockpit.session?.active ? "" : "disabled"}
+                                class="flex-1 border border-red-600/60 bg-red-600/10 text-red-500
+                                       py-2 text-xs font-black uppercase tracking-widest
+                                       hover:bg-red-600 hover:text-white transition disabled:opacity-30">
+                            Stop
+                        </button>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="flex justify-between text-[11px] text-zinc-500 uppercase mb-1">
+                        <span>Steering Sensitivity</span>
+                        <span id="sens-val-${cockpit.cockpit_id}" class="text-red-500">
+                            ${escapeHtml(settings.steering_sensitivity ?? 100)}%
+                        </span>
+                    </div>
+
+                    <input type="range"
+                           id="sens-${cockpit.cockpit_id}"
+                           min="10" max="200" step="5"
+                           value="${escapeHtml(settings.steering_sensitivity ?? 100)}"
+                           oninput="updateSensitivityLabel(${cockpit.cockpit_id})"
+                           class="w-full accent-red-600">
+                </div>
+
+                <div>
+                    <div class="flex justify-between text-[11px] text-zinc-500 uppercase mb-1">
+                        <span>Throttle Sensitivity</span>
+                        <span id="throttle-val-${cockpit.cockpit_id}" class="text-red-500">
+                            ${escapeHtml(settings.throttle_sensitivity ?? 100)}%
+                        </span>
+                    </div>
+
+                    <input type="range"
+                           id="throttle-${cockpit.cockpit_id}"
+                           min="10" max="100" step="5"
+                           value="${escapeHtml(settings.throttle_sensitivity ?? 100)}"
+                           oninput="updateThrottleLabel(${cockpit.cockpit_id})"
+                           class="w-full accent-red-600">
+                </div>
+
+                <button onclick="saveCockpitSettings(${cockpit.cockpit_id})"
+                        class="w-full border border-red-600/60 bg-red-600/10 text-red-500
+                               py-2.5 text-xs font-black uppercase tracking-widest
+                               hover:bg-red-600 hover:text-white transition">
+                    Apply
+                </button>
+
+            </div>
+        `;
+    }).join("");
+
+    renderRadioPool(data);
+}
+
+function renderRadioPool(data) {
+    const el = document.getElementById("radioPool");
+    const radios = data.radios || [];
+    if (!radios.length) {
+        el.innerHTML = "";
+        return;
+    }
+    el.innerHTML = `
+        <div class="border border-white/10 rounded-lg p-3">
+            <div class="text-[10px] font-black uppercase tracking-widest text-zinc-500 mb-2">Nano Radios</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-2">
+                ${radios.map(radio => `
+                    <div class="bg-zinc-950 border border-white/10 rounded px-3 py-2 text-xs">
+                        <div class="font-bold">${escapeHtml(radio.radio_id)}</div>
+                        <div class="text-zinc-500 mt-1">
+                            ${radio.connected ? "CONNECTED" : "DISCONNECTED"}
+                            ${radio.assigned ? " · ASSIGNED" : " · AVAILABLE"}
+                        </div>
+                    </div>
+                `).join("")}
+            </div>
+        </div>`;
+}
+
+function updateSensitivityLabel(cockpitId) {
+    const value = document.getElementById(`sens-${cockpitId}`).value;
+    document.getElementById(`sens-val-${cockpitId}`).innerText = `${value}%`;
+}
+
+function updateThrottleLabel(cockpitId) {
+    const value = document.getElementById(`throttle-${cockpitId}`).value;
+    document.getElementById(`throttle-val-${cockpitId}`).innerText = `${value}%`;
+}
+
+async function refreshCockpits() {
+    const button = document.querySelector('button[onclick="refreshCockpits()"]');
+    if (button) button.disabled = true;
+    try {
+        const res = await fetch("/api/cockpits/refresh", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: "{}"
+        });
+        const data = await res.json();
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || "Discovery refresh failed");
+        }
+        renderCockpits(data);
+        showCockpitMessage("Discovery refreshed", true);
+    } catch (error) {
+        showCockpitMessage(error.message, false);
+    } finally {
+        if (button) button.disabled = false;
+    }
+}
+
+async function loadCockpits() {
+    const grid = document.getElementById("cockpitGrid");
+    grid.innerHTML = '<div class="text-xs text-zinc-500 uppercase">Discovering...</div>';
+
+    try {
+        const res = await fetch("/api/cockpits");
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || "Cockpit discovery failed");
+        }
+
+        renderCockpits(data);
+    } catch (error) {
+        grid.innerHTML = `
+            <div class="text-xs text-red-500 uppercase">
+                ${escapeHtml(error.message)}
+            </div>`;
+    }
+}
+
+async function selectCockpitVehicle(cockpitId, vehicleName) {
+    const select = document.getElementById(`vehicle-${cockpitId}`);
+    if (!select) return;
+
+    select.disabled = true;
+
+    try {
+        const res = await fetch(`/api/cockpits/${cockpitId}/vehicle`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({vehicle_name: vehicleName})
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || "Vehicle assignment failed");
+        }
+
+        showCockpitMessage(
+            `Cockpit ${cockpitId} → ${data.vehicle || "Unassigned"}`,
+            true
+        );
+
+        await loadCockpits();
+    } catch (error) {
+        showCockpitMessage(error.message, false);
+        await loadCockpits();
+    }
+}
+
+async function saveCockpitSettings(cockpitId) {
+    const button = event.currentTarget;
+    button.disabled = true;
+
+    try {
+        const duration = document.getElementById(`duration-${cockpitId}`).value;
+        const sensitivity = document.getElementById(`sens-${cockpitId}`).value;
+        const throttle = document.getElementById(`throttle-${cockpitId}`).value;
+
+        const res = await fetch(`/api/cockpits/${cockpitId}/settings`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                session_duration_minutes: Number(duration),
+                steering_sensitivity: Number(sensitivity),
+                throttle_sensitivity: Number(throttle)
+            })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || "Settings save failed");
+        }
+
+        showCockpitMessage(`Cockpit ${cockpitId} settings saved`, true);
+        await loadCockpits();
+    } catch (error) {
+        showCockpitMessage(error.message, false);
+    } finally {
+        button.disabled = false;
+    }
+}
+
+function formatRemaining(seconds) {
+    seconds = Math.max(0, Number(seconds) || 0);
+    const minutes = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
+async function startCockpitSession(cockpitId) {
+    const button = document.getElementById(`session-start-${cockpitId}`);
+    if (button) button.disabled = true;
+
+    try {
+        const duration = document.getElementById(`duration-${cockpitId}`).value;
+
+        // Save the selected duration before starting.
+        const settingsRes = await fetch(`/api/cockpits/${cockpitId}/settings`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                session_duration_minutes: Number(duration)
+            })
+        });
+
+        const settingsData = await settingsRes.json();
+
+        if (!settingsRes.ok || !settingsData.success) {
+            throw new Error(settingsData.error || "Session duration save failed");
+        }
+
+        const res = await fetch(`/api/cockpits/${cockpitId}/session/start`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: "{}"
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || "Session start failed");
+        }
+
+        showCockpitMessage(`Cockpit ${cockpitId} session started`, true);
+        await loadCockpits();
+    } catch (error) {
+        showCockpitMessage(error.message, false);
+        await loadCockpits();
+    }
+}
+
+async function stopCockpitSession(cockpitId) {
+    const button = document.getElementById(`session-stop-${cockpitId}`);
+    if (button) button.disabled = true;
+
+    try {
+        const res = await fetch(`/api/cockpits/${cockpitId}/session/stop`, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: "{}"
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || !data.success) {
+            throw new Error(data.error || "Session stop failed");
+        }
+
+        showCockpitMessage(`Cockpit ${cockpitId} session stopped`, true);
+        await loadCockpits();
+    } catch (error) {
+        showCockpitMessage(error.message, false);
+        await loadCockpits();
+    }
+}
+
+async function updateStatus() {
+    try {
+        const res = await fetch("/api/status");
+        const data = await res.json();
+
+        document.getElementById("autocenterToggle").checked = data.autocenter;
+
+        if (data.haptics) {
+            document.getElementById("gripThresh").value = data.haptics.grip_threshold;
+            document.getElementById("gripVal").innerText = data.haptics.grip_threshold + "G";
+
+            document.getElementById("bumpSens").value = data.haptics.bump_sensitivity;
+            document.getElementById("bumpVal").innerText = data.haptics.bump_sensitivity + "x";
+
+            document.getElementById("centeringGain").value = data.haptics.centering_gain;
+            document.getElementById("centeringVal").innerText = data.haptics.centering_gain + "%";
+
+            document.getElementById("alphaFilter").value = data.haptics.alpha;
+            document.getElementById("alphaVal").innerText = data.haptics.alpha;
+        }
+    } catch (_) {
+        // Keep the cockpit UI usable if status polling temporarily fails.
+    }
+}
+
+async function updateHapticSettings() {
+    const grip = document.getElementById("gripThresh").value;
+    const bump = document.getElementById("bumpSens").value;
+    const centering = document.getElementById("centeringGain").value;
+    const alpha = document.getElementById("alphaFilter").value;
+
+    document.getElementById("gripVal").innerText = grip + "G";
+    document.getElementById("bumpVal").innerText = bump + "x";
+    document.getElementById("centeringVal").innerText = centering + "%";
+    document.getElementById("alphaVal").innerText = alpha;
+
+    await fetch("/api/haptics/tune", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            grip_threshold: grip,
+            bump_sensitivity: bump,
+            centering_gain: centering,
+            alpha: alpha
+        })
+    });
+}
+
+async function toggleAutocenter() {
+    const enabled = document.getElementById("autocenterToggle").checked;
+
+    await fetch("/api/autocenter/toggle", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({enabled})
+    });
+}
+
+setInterval(updateStatus, 1000);
+
+setInterval(async () => {
+    try {
+        const res = await fetch("/api/cockpits");
+        const data = await res.json();
+
+        if (!res.ok || !data.success) return;
+
+        data.cockpits.forEach(cockpit => {
+            const remainingEl = document.getElementById(
+                `remaining-${cockpit.cockpit_id}`
+            );
+
+            if (remainingEl) {
+                remainingEl.innerText = formatRemaining(
+                    cockpit.session?.remaining_seconds || 0
+                );
+            }
+        });
+
+        // Re-render when a session changes active/inactive state or expires,
+        // so vehicle release and button states are reflected immediately.
+        const changed = data.cockpits.some(cockpit => {
+            const cached = cockpitCache[cockpit.cockpit_id];
+            return !cached ||
+                cached.vehicle !== cockpit.vehicle ||
+                cached.session?.active !== cockpit.session?.active ||
+                cached.wheel?.path !== cockpit.wheel?.path ||
+                cached.wheel?.phys !== cockpit.wheel?.phys ||
+                cached.radio?.radio_id !== cockpit.radio?.radio_id ||
+                cached.radio?.connected !== cockpit.radio?.connected;
+        }) || JSON.stringify(radioCache) !== JSON.stringify(data.radios || []);
+
+        if (changed) {
+            renderCockpits(data);
+        } else {
+            cockpitCache = {};
+            data.cockpits.forEach(c => cockpitCache[c.cockpit_id] = c);
+            radioCache = data.radios || [];
+        }
+    } catch (_) {
+        // Keep the existing UI usable during a temporary API failure.
+    }
+}, 1000);
+
+updateStatus();
+loadCockpits();
+</script>
+
+</body>
+</html>
